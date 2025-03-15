@@ -19,3 +19,16 @@ AI-powered assistant for Algorand developers – providing real time guidance on
 ### 4. Multi Platform Support
 - Available on Web App (React), Discord, Slack, and VS Code.
 - Provides developer assistance directly inside IDEs and chat apps.
+
+### 5. AI Powered Smart Contract Debugger (Unique Feature 🚀)
+
+Analyzes PyTeal smart contracts for:
+  - Errors, inefficiencies, and security vulnerabilities.
+  - Optimization suggestions for lower gas fees.
+  - Debugging steps to fix issues.
+Supports real time debugging in VS Code.
+
+### 6. Algorand SDK & Smart Contract Assistance
+- Supports Python, JavaScript, and Go SDKs.
+- Provides step by step guidance for writing smart contracts.
+- Helps with testing, deployment, and debugging.
