@@ -1,0 +1,13 @@
+discord.py>=2.3.2
+python-dotenv>=1.0.0
+groq>=0.3.0
+langchain-community>=0.2.1
+langchain-core>=0.2.1
+langchain-text-splitters>=0.2.1
+sentence-transformers>=2.8.0
+faiss-cpu>=1.8.0
+pypdf2>=3.0.1
+transformers>=4.40.0
+accelerate>=0.30.0
+bitsandbytes>=0.43.0
+requests>=2.32.0
