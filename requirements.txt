@@ -10,4 +10,4 @@ pypdf2>=3.0.1
 transformers>=4.40.0
 accelerate>=0.30.0
 bitsandbytes>=0.43.0
-requests>=2.32.0
+algokit_utils
