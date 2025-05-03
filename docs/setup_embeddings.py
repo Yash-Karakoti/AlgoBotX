@@ -18,3 +18,5 @@ vectorstore = FAISS.from_documents(documents, embeddings)
 vectorstore.save_local("my_vectorstore")
 
 print("PDF processed and vectorstore saved!")
+
+#Yet to be completed (on process)
