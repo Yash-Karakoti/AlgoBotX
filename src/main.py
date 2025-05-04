@@ -49,7 +49,7 @@ async def faucet(interaction: discord.Interaction, wallet_address: str):
         tx_id = getattr(result, "tx_id", None)
 
         if tx_id:
-            explorer_link = f"https://testnet.algoexplorer.io/tx/{tx_id}"
+            explorer_link = f"https://testnet.explorer.perawallet.app/tx/{tx_id}"
             await interaction.followup.send(
                 f"✅ 1 TestNet ALGO sent to `{wallet_address}`!\n"
                 f"View transaction: {explorer_link}"
