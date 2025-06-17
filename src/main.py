@@ -289,6 +289,440 @@ def get_document_answer(question_text):
         print(f"❌ Document retrieval error: {e}")
         return None, []
 
+# Enhanced OCR functionality with multiple preprocessing approaches
+def preprocess_image_for_ocr(image):
+    """Advanced image preprocessing for better OCR accuracy"""
+    # Convert to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # Resize image if too small (OCR works better with larger images)
+    height, width = gray.shape
+    if height < 300 or width < 300:
+        scale_factor = max(300/height, 300/width, 2.0)
+        new_width = int(width * scale_factor)
+        new_height = int(height * scale_factor)
+        gray = cv2.resize(gray, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+    
+    # Noise removal
+    denoised = cv2.medianBlur(gray, 3)
+    
+    # Sharpen the image
+    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+    sharpened = cv2.filter2D(denoised, -1, kernel)
+    
+    # Adaptive thresholding (better than simple thresholding)
+    thresh = cv2.adaptiveThreshold(
+        sharpened, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
+    
+    # Deskewing
+    coords = np.column_stack(np.where(thresh > 0))
+    if len(coords) > 0:
+        angle = cv2.minAreaRect(coords)[-1]
+        if angle < -45:
+            angle = -(90 + angle)
+        else:
+            angle = -angle
+        
+        if abs(angle) > 0.5:  # Only rotate if significantly skewed
+            (h, w) = thresh.shape[:2]
+            center = (w // 2, h // 2)
+            M = cv2.getRotationMatrix2D(center, angle, 1.0)
+            thresh = cv2.warpAffine(thresh, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    
+    # Morphological operations to clean up
+    kernel = np.ones((2,2), np.uint8)
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
+    return cleaned
+
+def preprocess_image_for_ocr_v2(image):
+    """Enhanced image preprocessing with multiple techniques"""
+    # Convert to grayscale
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
+    
+    # Resize image to optimal size (OCR works better with larger images)
+    height, width = gray.shape
+    if height < 600 or width < 600:
+        scale_factor = max(600/height, 600/width, 3.0)  # Increased scale factor
+        new_width = int(width * scale_factor)
+        new_height = int(height * scale_factor)
+        gray = cv2.resize(gray, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+    
+    # Apply Gaussian blur to reduce noise
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    
+    # Multiple thresholding approaches
+    # 1. Otsu's thresholding
+    _, thresh1 = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # 2. Adaptive thresholding
+    thresh2 = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 2)
+    
+    # 3. Try inverted thresholding (for dark backgrounds)
+    _, thresh3 = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Choose the best threshold based on the amount of white pixels
+    thresholds = [thresh1, thresh2, thresh3]
+    best_thresh = max(thresholds, key=lambda x: cv2.countNonZero(x))
+    
+    # Morphological operations to clean up
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    cleaned = cv2.morphologyEx(best_thresh, cv2.MORPH_CLOSE, kernel)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel)
+    
+    # Remove small noise
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < 50:  # Remove very small contours
+            cv2.drawContours(cleaned, [contour], -1, 0, -1)
+    
+    return cleaned
+
+def clean_extracted_text(text):
+    """Clean and validate extracted text"""
+    # Remove excessive whitespace
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    cleaned = '\n'.join(lines)
+    
+    # Remove common OCR artifacts
+    artifacts = ['|', '~', '`', '^', '_', '¢', '£', '¥', '§']
+    for artifact in artifacts:
+        cleaned = cleaned.replace(artifact, '')
+    
+    # Remove lines that are mostly special characters
+    final_lines = []
+    for line in cleaned.split('\n'):
+        if line.strip():
+            # Count alphanumeric characters
+            alnum_count = sum(c.isalnum() for c in line)
+            if alnum_count >= len(line.strip()) * 0.3:  # At least 30% alphanumeric
+                final_lines.append(line.strip())
+    
+    return '\n'.join(final_lines)
+
+def extract_text_with_dpi_adjustment(image_path):
+    """Try OCR with different DPI settings"""
+    try:
+        # Load original image
+        image = cv2.imread(image_path)
+        if image is None:
+            return None
+        
+        # Try different scaling factors to simulate different DPI
+        scale_factors = [1.0, 1.5, 2.0, 2.5, 3.0, 0.5]
+        
+        for scale in scale_factors:
+            try:
+                height, width = image.shape[:2]
+                new_width = int(width * scale)
+                new_height = int(height * scale)
+                
+                resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+                processed = preprocess_image_for_ocr_v2(resized)
+                
+                # Try with multiple PSM modes
+                for psm in [6, 8, 7, 13]:
+                    config = f'--oem 3 --psm {psm}'
+                    text = pytesseract.image_to_string(processed, config=config)
+                    
+                    if text and len(text.strip()) > 2:
+                        print(f"✅ Success with scale={scale}, PSM={psm}: '{text.strip()}'")
+                        return clean_extracted_text(text)
+            
+            except Exception:
+                continue
+        
+        return None
+    
+    except Exception as e:
+        print(f"❌ DPI adjustment error: {e}")
+        return None
+
+def extract_text_from_image(image_url_or_path):
+    """Extract text using multiple OCR approaches"""
+    try:
+        # Load image
+        if image_url_or_path.startswith('http'):
+            response = requests.get(image_url_or_path)
+            image_array = np.asarray(bytearray(response.content), dtype=np.uint8)
+            image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        else:
+            image = cv2.imread(image_url_or_path)
+        
+        if image is None:
+            print("❌ Could not load image")
+            return None
+        
+        # Try multiple preprocessing approaches
+        processed_images = []
+        
+        # Original preprocessing
+        processed_images.append(preprocess_image_for_ocr(image))
+        
+        # Enhanced preprocessing
+        processed_images.append(preprocess_image_for_ocr_v2(image))
+        
+        # Simple grayscale conversion
+        gray_simple = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        processed_images.append(gray_simple)
+        
+        # Inverted image (for dark backgrounds)
+        gray_inverted = 255 - gray_simple
+        processed_images.append(gray_inverted)
+        
+        # Extended OCR configurations
+        configs = [
+            '--oem 3 --psm 6',   # Uniform block of text
+            '--oem 3 --psm 8',   # Single word
+            '--oem 3 --psm 7',   # Single text line
+            '--oem 3 --psm 13',  # Raw line
+            '--oem 3 --psm 11',  # Sparse text
+            '--oem 3 --psm 12',  # Sparse text with OSD
+            '--oem 3 --psm 3',   # Fully automatic page segmentation
+            '--oem 1 --psm 6',   # Different OCR engine mode
+            '--oem 2 --psm 6',   # Another OCR engine mode
+        ]
+        
+        best_result = ""
+        best_confidence = 0
+        
+        # Try each combination of preprocessing and configuration
+        for processed_img in processed_images:
+            for config in configs:
+                try:
+                    # Get confidence data
+                    data = pytesseract.image_to_data(
+                        processed_img, 
+                        config=config, 
+                        output_type=pytesseract.Output.DICT
+                    )
+                    
+                    # Calculate confidence
+                    confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
+                    if confidences:
+                        avg_confidence = sum(confidences) / len(confidences)
+                        text = pytesseract.image_to_string(processed_img, config=config)
+                        
+                        # Only consider results with reasonable confidence and length
+                        if avg_confidence > 30 and len(text.strip()) > 0:
+                            if avg_confidence > best_confidence:
+                                best_confidence = avg_confidence
+                                best_result = text
+                                print(f"✅ Better result found: confidence={avg_confidence:.1f}%, text='{text.strip()[:50]}'")
+                
+                except Exception as e:
+                    continue
+        
+        # Clean and return best result
+        if best_result:
+            cleaned_text = clean_extracted_text(best_result)
+            print(f"✅ Final OCR result: {len(cleaned_text)} characters with {best_confidence:.1f}% confidence")
+            return cleaned_text if len(cleaned_text) > 2 else None
+        
+        print("❌ No readable text found with any approach")
+        return None
+        
+    except Exception as e:
+        print(f"❌ OCR extraction error: {e}")
+        return None
+
+async def handle_image_question(image_attachment, question_text, send_func):
+    """Handle OCR + RAG workflow with enhanced error handling"""
+    try:
+        print(f"🖼️ Processing image with question: {question_text}")
+        
+        # Step 1: Extract text from image using OCR
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            # Download image to temporary file
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_attachment.url) as response:
+                    temp_file.write(await response.read())
+                    temp_file_path = temp_file.name
+        
+        # Extract text from image with multiple approaches
+        extracted_text = extract_text_from_image(temp_file_path)
+
+        # If that fails, try DPI adjustment approach
+        if not extracted_text:
+            print("🔄 Trying DPI adjustment approach...")
+            extracted_text = extract_text_with_dpi_adjustment(temp_file_path)
+
+        # If still failing, try with different image formats
+        if not extracted_text:
+            print("🔄 Trying format conversion...")
+            try:
+                # Convert to different format and try again
+                img = cv2.imread(temp_file_path)
+                cv2.imwrite(temp_file_path.replace('.png', '_converted.jpg'), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                extracted_text = extract_text_from_image(temp_file_path.replace('.png', '_converted.jpg'))
+            except:
+                pass
+        
+        # Clean up temporary file
+        os.unlink(temp_file_path)
+        
+        if not extracted_text:
+            # Provide helpful error message with suggestions
+            error_embed = discord.Embed(
+                title="❌ OCR Processing Failed",
+                description="Could not extract readable text from the image.",
+                color=0xff6b6b
+            )
+            error_embed.add_field(
+                name="💡 Tips to improve OCR accuracy:",
+                value=(
+                    "• Ensure text is clearly visible and not blurry\n"
+                    "• Use high contrast (dark text on light background)\n"
+                    "• Avoid handwritten text - use printed/typed text\n"
+                    "• Make sure text is horizontal (not rotated)\n"
+                    "• Try cropping to focus only on the text area\n"
+                    "• Use higher resolution images when possible"
+                ),
+                inline=False
+            )
+            error_embed.set_footer(text="Try uploading a clearer image or ask your question directly")
+            
+            await send_func(embed=error_embed)
+            return False
+        
+        print(f"📝 Extracted text preview: {extracted_text[:200]}...")
+        
+        # Step 2: Create enhanced question combining user query + extracted text
+        enhanced_question = f"""
+Based on this extracted text from an image:
+
+"{extracted_text}"
+
+User question: {question_text}
+
+Please answer the user's question using the extracted text and any relevant documentation.
+"""
+        
+        # Step 3: Use existing RAG pipeline with enhanced question
+        print("🔍 Processing through existing RAG pipeline...")
+        
+        # First try documents (maintaining your document-first approach)
+        document_answer, source_info = get_document_answer(enhanced_question)
+        
+        if document_answer and len(document_answer.strip()) > 50:
+            print("✅ Found relevant documentation to supplement OCR text")
+            
+            # Create rich embed combining OCR and document results
+            embed = discord.Embed(
+                title="📚 OCR + Documentation Answer",
+                color=0x00ff88
+            )
+            
+            # Add extracted text section
+            if len(extracted_text) > 500:
+                text_preview = extracted_text[:500] + "..."
+            else:
+                text_preview = extracted_text
+                
+            embed.add_field(
+                name="🖼️ Extracted Text from Image",
+                value=f"``````",
+                inline=False
+            )
+            
+            # Add document-based answer
+            embed.add_field(
+                name="📖 Answer from Documentation",
+                value=document_answer,
+                inline=False
+            )
+            
+            embed.set_footer(text="✅ Combined OCR extraction + official documentation")
+            
+            await send_func(embed=embed)
+            return True
+        
+        # Step 4: If no relevant docs, use OCR text + AI fallback
+        if not groq:
+            # Just return the extracted text if no AI available
+            embed = discord.Embed(
+                title="🖼️ Text Extracted from Image",
+                description=f"``````",
+                color=0x0099ff
+            )
+            embed.set_footer(text="OCR extraction complete - no AI processing available")
+            await send_func(embed=embed)
+            return True
+        
+        print("🤖 Using AI to process OCR text + question")
+        
+        # Enhanced Groq prompt for OCR + question processing
+        ocr_prompt = f"""You are an Algorand expert assistant. I've extracted text from an image using OCR, and the user has a question about it.
+
+Extracted text from image:
+"{extracted_text}"
+
+User's question: {question_text}
+
+Please:
+1. Analyze the extracted text for any Algorand-related information
+2. Answer the user's question based on the extracted text
+3. Provide additional Algorand context if relevant
+4. If the extracted text doesn't contain enough information to answer the question, say so clearly
+
+Focus on being helpful and accurate based on what was actually extracted from the image."""
+
+        response = groq.chat.completions.create(
+            model="llama3-70b-8192",
+            messages=[{"role": "user", "content": ocr_prompt}],
+            max_tokens=1000,
+            temperature=0.3,
+            top_p=0.9,
+            stream=False,
+        )
+        
+        ai_answer = response.choices[0].message.content
+        
+        # Create comprehensive embed
+        embed = discord.Embed(
+            title="🖼️ OCR + AI Analysis",
+            color=0xffaa00
+        )
+        
+        # Add extracted text
+        if len(extracted_text) > 400:
+            text_preview = extracted_text[:400] + "..."
+        else:
+            text_preview = extracted_text
+            
+        embed.add_field(
+            name="📝 Extracted Text",
+            value=f"``````",
+            inline=False
+        )
+        
+        # Add AI analysis
+        embed.add_field(
+            name="🤖 AI Analysis",
+            value=ai_answer,
+            inline=False
+        )
+        
+        embed.set_footer(text="⚠️ OCR extraction + AI analysis (no relevant documentation found)")
+        
+        await send_func(embed=embed)
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error in OCR + RAG workflow: {e}")
+        error_embed = discord.Embed(
+            title="❌ OCR Processing Error",
+            description=f"Sorry, I encountered an error processing the image: {str(e)[:200]}",
+            color=0xff0000
+        )
+        await send_func(embed=error_embed)
+        return False
+
 # Initialize Groq client (as fallback only)
 def initialize_groq():
     groq_api_key = os.getenv("GROQ_API_KEY")
