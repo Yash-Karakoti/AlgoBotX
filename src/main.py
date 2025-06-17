@@ -22,6 +22,14 @@ from langchain.document_loaders import DirectoryLoader, TextLoader
 from langchain.schema import HumanMessage
 import glob
 import re
+import pytesseract
+from PIL import Image, ImageEnhance, ImageFilter
+import requests
+import io
+import tempfile
+import aiohttp
+import cv2
+import numpy as np
 
 load_dotenv()
 
