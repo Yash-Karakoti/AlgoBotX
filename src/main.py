@@ -937,6 +937,58 @@ async def ask_slash(interaction: discord.Interaction, question: str):
     
     await handle_question(question, send_response)
 
+    Usage in handle_image_question
+
+
+    async def handle_image_question(image_attachment, question_text, send_func):
+        """Handle OCR + RAG workflow with enhanced error handling"""
+        try:
+            print(f"🖼 Processing image with question: {question_text}")
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(image_attachment.url) as response:
+                        temp_file.write(await response.read())
+                        temp_file_path = temp_file.name
+
+            # Extract text from image with multiple approaches
+            extracted_text = extract_text_from_image(temp_file_path)
+            # If that fails, try DPI adjustment approach
+            if not extracted_text:
+                print("🔄 Trying DPI adjustment approach...")
+                extracted_text = extract_text_with_dpi_adjustment(temp_file_path)
+            # If still failing, try with different image formats
+            if not extracted_text:
+                print("🔄 Trying format conversion...")
+                try:
+                    img = cv2.imread(temp_file_path)
+                    cv2.imwrite(temp_file_path.replace('.png', '_converted.jpg'), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    extracted_text = extract_text_from_image(temp_file_path.replace('.png', '_converted.jpg'))
+                except:
+                    pass
+            os.unlink(temp_file_path)
+            if not extracted_text:
+                error_embed = discord.Embed(
+                    title="❌ OCR Processing Failed",
+                    description="Could not extract readable text from the image.",
+                    color=0xff6b6b
+                )
+                error_embed.add_field(
+                    name="💡 Tips to improve OCR accuracy:",
+                    value=(
+                        "• Ensure text is clearly visible and not blurry\n"
+                        "• Use high contrast (dark text on light background)\n"
+                        "• Avoid handwritten text - use printed/typed text\n"
+                        "• Make sure text is horizontal (not rotated)\n"
+                        "• Try cropping to focus only on the text area\n"
+                        "• Use higher resolution images when possible"
+                    ),
+                    inline=False
+                )
+                error_embed.set_footer(text="Try uploading a clearer image or ask your question directly")
+                await send_func(embed=error_embed)
+                return False
+            print(f"📝 Extracted text preview: {extracted_text[:200]}...")
+
 # Status command to check system health
 @bot.tree.command(name="status", description="Check bot and document system status")
 async def status_command(interaction: discord.Interaction):
