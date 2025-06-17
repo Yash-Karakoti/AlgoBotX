@@ -437,6 +437,34 @@ async def on_ready():
     except Exception as e:
         print(f"Error syncing commands: {e}")
 
+# Enhanced message handler with document priority and OCR support
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+    
+    # Check if message has image attachments
+    image_attachments = [att for att in message.attachments if att.content_type and att.content_type.startswith('image/')]
+    
+    if bot.user in message.mentions:
+        # Clean the message content to remove the mention
+        question_text = message.content.replace(f'<@{bot.user.id}>', '').strip()
+        
+        if image_attachments and question_text:
+            # Handle OCR + RAG workflow
+            async with message.channel.typing():
+                await handle_image_question(image_attachments[0], question_text, message.channel.send)
+        elif image_attachments:
+            # Just OCR without specific question
+            async with message.channel.typing():
+                await handle_image_question(image_attachments[0], "What information can you extract from this image?", message.channel.send)
+        elif question_text:
+            # Regular text question (existing functionality)
+            async with message.channel.typing():
+                await handle_question(question_text, message.channel.send)
+    
+    await bot.process_commands(message)
+
 # Enhanced message handler with document priority
 @bot.event
 async def on_message(message):
