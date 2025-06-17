@@ -52,3 +52,5 @@ The planned additions are mentioned below:
 - Command Example: /get_faucet <your_wallet_address>
 - The bot will automatically transfer Testnet Algos to the given address.
 - No need to manually visit a faucet website instant test tokens for development!
+
+for Algorand HackSeries 2025
